@@ -6,7 +6,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from dotenv import load_dotenv
 
 from database import init_db
-from handlers import client, admin
+import client, admin
 
 load_dotenv()
 

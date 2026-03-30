@@ -6,7 +6,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.filters import Filter
 
 from database import get_db, TimeSlot, Booking
-from keyboards.admin_kb import admin_main_keyboard, slots_delete_keyboard
+from admin_kb import admin_main_keyboard, slots_delete_keyboard
 
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 

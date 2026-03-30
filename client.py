@@ -5,7 +5,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 from database import get_db, TimeSlot, Booking
-from keyboards.client_kb import services_keyboard, dates_keyboard, times_keyboard, confirm_keyboard
+from client_kb import services_keyboard, dates_keyboard, times_keyboard, confirm_keyboard
 
 router = Router()
 
@@ -134,7 +134,7 @@ async def cancel(callback: CallbackQuery, state: FSMContext):
 
 @router.message(BookingState.waiting_payment, F.photo)
 async def receive_payment(message: Message, state: FSMContext):
-    from utils.gemini import verify_payment_screenshot
+    from gemini import verify_payment_screenshot
 
     data = await state.get_data()
     db = get_db()
