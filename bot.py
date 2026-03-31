@@ -6,18 +6,17 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from dotenv import load_dotenv
 
 from database import init_db
-import client, admin
+import client
+import admin
 
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-
 logging.basicConfig(level=logging.INFO)
 
 
 async def main():
     init_db()
-
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher(storage=MemoryStorage())
 
