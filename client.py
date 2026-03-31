@@ -1,14 +1,14 @@
 import os
 from datetime import date
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InputMediaPhoto
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 from database import get_db, Service, TimeSlot, Booking
 from client_kb import (
-    main_menu_keyboard, service_keyboard, calendar_keyboard,
-    times_keyboard, confirm_keyboard
+    main_menu_keyboard, simple_back_keyboard, service_keyboard,
+    calendar_keyboard, times_keyboard, confirm_keyboard, payment_keyboard
 )
 
 router = Router()
@@ -29,7 +29,9 @@ class BookingState(StatesGroup):
     waiting_payment = State()
 
 
-async def send_main_menu(target, state: FSMContext = None):
+# ========== ГЛАВНОЕ МЕНЮ ==========
+
+async def show_main_menu(target, state: FSMContext = None):
     text = (
         f"Привет, я {MASTER_NAME} 💅\n\n"
         "Очень рада видеть тебя здесь!\n"
@@ -38,7 +40,7 @@ async def send_main_menu(target, state: FSMContext = None):
         "• выбрать услугу\n"
         "• подобрать удобные дату и время\n"
         "• подтвердить запись в пару кликов\n\n"
-        "Буду ждать тебя на красивый и аккуратный маникюр 🖤\n"
+        "Буду ждать тебя на красивый маникюр 🖤\n"
         "Выбери, с чего начнём ⚡"
     )
     if state:
@@ -46,24 +48,29 @@ async def send_main_menu(target, state: FSMContext = None):
     if isinstance(target, Message):
         await target.answer(text, reply_markup=main_menu_keyboard())
     else:
-        await target.message.edit_text(text, reply_markup=main_menu_keyboard())
+        try:
+            await target.message.edit_text(text, reply_markup=main_menu_keyboard())
+        except Exception:
+            await target.message.answer(text, reply_markup=main_menu_keyboard())
 
 
 @router.message(F.text == "/start")
 async def cmd_start(message: Message, state: FSMContext):
-    await send_main_menu(message, state)
+    await show_main_menu(message, state)
 
 
 @router.callback_query(F.data == "to_menu")
 async def to_menu(callback: CallbackQuery, state: FSMContext):
-    await send_main_menu(callback, state)
+    await show_main_menu(callback, state)
 
+
+# ========== АДРЕС / РАБОТЫ ==========
 
 @router.callback_query(F.data == "menu:address")
 async def show_address(callback: CallbackQuery):
     await callback.message.edit_text(
-        f"📍 <b>Адрес:</b>\n{SALON_ADDRESS}\n\nНажми ⬅️ В меню чтобы вернуться.",
-        reply_markup=main_menu_keyboard(),
+        f"📍 <b>Адрес:</b>\n{SALON_ADDRESS}",
+        reply_markup=simple_back_keyboard(),
         parse_mode="HTML"
     )
 
@@ -72,23 +79,22 @@ async def show_address(callback: CallbackQuery):
 async def show_portfolio(callback: CallbackQuery):
     await callback.message.edit_text(
         "🖼 Работы мастера скоро появятся здесь!",
-        reply_markup=main_menu_keyboard()
+        reply_markup=simple_back_keyboard()
     )
 
 
-# --- УСЛУГИ (КАРУСЕЛЬ) ---
+# ========== КАРУСЕЛЬ УСЛУГ ==========
 
-async def show_service_page(target, index: int, state: FSMContext):
+async def show_service_page(callback: CallbackQuery, index: int, state: FSMContext):
     db = get_db()
     services = db.query(Service).filter(Service.is_active == True).all()
     db.close()
 
     if not services:
-        text = "😔 Пока нет доступных услуг. Попробуйте позже."
-        if isinstance(target, Message):
-            await target.answer(text)
-        else:
-            await target.message.edit_text(text)
+        await callback.message.edit_text(
+            "😔 Пока нет доступных услуг.",
+            reply_markup=simple_back_keyboard()
+        )
         return
 
     index = max(0, min(index, len(services) - 1))
@@ -104,22 +110,19 @@ async def show_service_page(target, index: int, state: FSMContext):
     kb = service_keyboard(s.id, index, len(services))
 
     if s.photo_file_id:
-        if isinstance(target, Message):
-            await target.answer_photo(s.photo_file_id, caption=caption, reply_markup=kb, parse_mode="HTML")
-        else:
-            try:
-                await target.message.delete()
-            except Exception:
-                pass
-            await target.message.answer_photo(s.photo_file_id, caption=caption, reply_markup=kb, parse_mode="HTML")
+        try:
+            await callback.message.edit_media(
+                InputMediaPhoto(media=s.photo_file_id, caption=caption, parse_mode="HTML"),
+                reply_markup=kb
+            )
+        except Exception:
+            await callback.message.delete()
+            await callback.message.answer_photo(s.photo_file_id, caption=caption, reply_markup=kb, parse_mode="HTML")
     else:
-        if isinstance(target, Message):
-            await target.answer(caption, reply_markup=kb, parse_mode="HTML")
-        else:
-            try:
-                await target.message.edit_text(caption, reply_markup=kb, parse_mode="HTML")
-            except Exception:
-                await target.message.answer(caption, reply_markup=kb, parse_mode="HTML")
+        try:
+            await callback.message.edit_text(caption, reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            await callback.message.answer(caption, reply_markup=kb, parse_mode="HTML")
 
 
 @router.callback_query(F.data == "menu:book")
@@ -134,93 +137,60 @@ async def flip_service(callback: CallbackQuery, state: FSMContext):
     await show_service_page(callback, index, state)
 
 
-# --- ВЫБОР ДАТЫ ---
+@router.callback_query(F.data.startswith("back_to_services:"))
+async def back_to_services(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    index = data.get("service_index", 0)
+    await state.set_state(BookingState.choosing_service)
+    await show_service_page(callback, index, state)
 
-async def show_calendar(target, service_id: int, state: FSMContext):
+
+# ========== КАЛЕНДАРЬ ==========
+
+async def show_calendar(callback: CallbackQuery, service_id: int, year: int, month: int, state: FSMContext):
     db = get_db()
     slots = db.query(TimeSlot).filter(TimeSlot.is_booked == False).all()
     db.close()
 
     available_dates = list(set(s.date for s in slots if s.date >= date.today().isoformat()))
+    await state.update_data(service_id=service_id)
 
-    today = date.today()
-    await state.update_data(service_id=service_id, cal_year=today.year, cal_month=today.month)
-
-    kb = calendar_keyboard(today.year, today.month, available_dates)
+    kb = calendar_keyboard(year, month, available_dates, service_id)
     text = "📅 <b>Выберите дату</b>\n\nПоказываем только доступные дни."
 
-    if isinstance(target, Message):
-        await target.answer(text, reply_markup=kb, parse_mode="HTML")
-    else:
-        try:
-            await target.message.delete()
-        except Exception:
-            pass
-        await target.message.answer(text, reply_markup=kb, parse_mode="HTML")
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await callback.message.delete()
+        await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
 @router.callback_query(F.data.startswith("book_service:"))
 async def book_service(callback: CallbackQuery, state: FSMContext):
     service_id = int(callback.data.split(":")[1])
+    today = date.today()
     await state.set_state(BookingState.choosing_date)
-    await show_calendar(callback, service_id, state)
-
-
-@router.callback_query(F.data.startswith("quick_service:"))
-async def quick_service(callback: CallbackQuery, state: FSMContext):
-    service_id = int(callback.data.split(":")[1])
-    db = get_db()
-    today_str = date.today().isoformat()
-    slot = db.query(TimeSlot).filter(
-        TimeSlot.is_booked == False,
-        TimeSlot.date >= today_str
-    ).order_by(TimeSlot.date, TimeSlot.time).first()
-    db.close()
-
-    if not slot:
-        await callback.answer("😔 Нет доступных слотов", show_alert=True)
-        return
-
-    await state.update_data(service_id=service_id, selected_date=slot.date, slot_id=slot.id, slot_time=slot.time)
-    await state.set_state(BookingState.entering_name)
-    await callback.message.answer(
-        f"👤 <b>Как к вам обращаться?</b>\n\nВведите имя.",
-        parse_mode="HTML"
-    )
+    await show_calendar(callback, service_id, today.year, today.month, state)
 
 
 @router.callback_query(F.data.startswith("cal_prev:"))
 async def cal_prev(callback: CallbackQuery, state: FSMContext):
-    _, year, month = callback.data.split(":")
-    year, month = int(year), int(month)
+    _, year, month, service_id = callback.data.split(":")
+    year, month, service_id = int(year), int(month), int(service_id)
     month -= 1
     if month < 1:
-        month = 12
-        year -= 1
-
-    db = get_db()
-    slots = db.query(TimeSlot).filter(TimeSlot.is_booked == False).all()
-    db.close()
-    available_dates = list(set(s.date for s in slots if s.date >= date.today().isoformat()))
-
-    await callback.message.edit_reply_markup(reply_markup=calendar_keyboard(year, month, available_dates))
+        month, year = 12, year - 1
+    await show_calendar(callback, service_id, year, month, state)
 
 
 @router.callback_query(F.data.startswith("cal_next:"))
 async def cal_next(callback: CallbackQuery, state: FSMContext):
-    _, year, month = callback.data.split(":")
-    year, month = int(year), int(month)
+    _, year, month, service_id = callback.data.split(":")
+    year, month, service_id = int(year), int(month), int(service_id)
     month += 1
     if month > 12:
-        month = 1
-        year += 1
-
-    db = get_db()
-    slots = db.query(TimeSlot).filter(TimeSlot.is_booked == False).all()
-    db.close()
-    available_dates = list(set(s.date for s in slots if s.date >= date.today().isoformat()))
-
-    await callback.message.edit_reply_markup(reply_markup=calendar_keyboard(year, month, available_dates))
+        month, year = 1, year + 1
+    await show_calendar(callback, service_id, year, month, state)
 
 
 @router.callback_query(F.data == "ignore")
@@ -228,11 +198,9 @@ async def ignore(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("select_date:"))
-async def select_date(callback: CallbackQuery, state: FSMContext):
-    selected_date = callback.data.split(":")[1]
-    await state.update_data(selected_date=selected_date)
+# ========== ВЫБОР ВРЕМЕНИ ==========
 
+async def show_times(callback: CallbackQuery, selected_date: str, service_id: int):
     db = get_db()
     slots = db.query(TimeSlot).filter(
         TimeSlot.date == selected_date,
@@ -244,22 +212,50 @@ async def select_date(callback: CallbackQuery, state: FSMContext):
         await callback.answer("На эту дату нет свободных слотов", show_alert=True)
         return
 
-    await state.set_state(BookingState.choosing_time)
+    kb = times_keyboard(slots, selected_date, service_id)
     try:
-        await callback.message.delete()
+        await callback.message.edit_text(
+            f"⏰ <b>Выберите время</b>\nДата: <b>{selected_date}</b>\n\nВыберите удобный слот:",
+            reply_markup=kb,
+            parse_mode="HTML"
+        )
     except Exception:
-        pass
-    await callback.message.answer(
-        f"⏰ <b>Выберите время</b>\nДата: {selected_date}\n\nВыберите удобный слот:",
-        reply_markup=times_keyboard(slots),
-        parse_mode="HTML"
-    )
+        await callback.message.answer(
+            f"⏰ <b>Выберите время</b>\nДата: <b>{selected_date}</b>\n\nВыберите удобный слот:",
+            reply_markup=kb,
+            parse_mode="HTML"
+        )
 
+
+@router.callback_query(F.data.startswith("select_date:"))
+async def select_date(callback: CallbackQuery, state: FSMContext):
+    selected_date = callback.data.split(":")[1]
+    await state.update_data(selected_date=selected_date)
+    await state.set_state(BookingState.choosing_time)
+    data = await state.get_data()
+    await show_times(callback, selected_date, data["service_id"])
+
+
+@router.callback_query(F.data.startswith("back_to_calendar:"))
+async def back_to_calendar(callback: CallbackQuery, state: FSMContext):
+    service_id = int(callback.data.split(":")[1])
+    today = date.today()
+    await state.set_state(BookingState.choosing_date)
+    await show_calendar(callback, service_id, today.year, today.month, state)
+
+
+@router.callback_query(F.data.startswith("back_to_times:"))
+async def back_to_times(callback: CallbackQuery, state: FSMContext):
+    _, selected_date, service_id = callback.data.split(":")
+    await state.set_state(BookingState.choosing_time)
+    await show_times(callback, selected_date, int(service_id))
+
+
+# ========== ВВОД ИМЕНИ ==========
 
 @router.callback_query(F.data.startswith("select_time:"), BookingState.choosing_time)
 async def select_time(callback: CallbackQuery, state: FSMContext):
     slot_id = int(callback.data.split(":")[1])
-
     db = get_db()
     slot = db.query(TimeSlot).filter(TimeSlot.id == slot_id).first()
     db.close()
@@ -272,13 +268,17 @@ async def select_time(callback: CallbackQuery, state: FSMContext):
     await state.set_state(BookingState.entering_name)
 
     try:
-        await callback.message.delete()
+        await callback.message.edit_text(
+            "👤 <b>Как к вам обращаться?</b>\n\nВведите ваше имя.",
+            reply_markup=simple_back_keyboard(),
+            parse_mode="HTML"
+        )
     except Exception:
-        pass
-    await callback.message.answer(
-        "👤 <b>Как к вам обращаться?</b>\n\nВведите имя.",
-        parse_mode="HTML"
-    )
+        await callback.message.answer(
+            "👤 <b>Как к вам обращаться?</b>\n\nВведите ваше имя.",
+            reply_markup=simple_back_keyboard(),
+            parse_mode="HTML"
+        )
 
 
 @router.message(BookingState.entering_name)
@@ -301,10 +301,47 @@ async def enter_name(message: Message, state: FSMContext):
         f"📅 Дата: {data['selected_date']}\n"
         f"🕐 Время: {data['slot_time']}\n\n"
         f"Всё верно?",
-        reply_markup=confirm_keyboard(),
+        reply_markup=confirm_keyboard(data["slot_id"], data["selected_date"], data["service_id"]),
         parse_mode="HTML"
     )
 
+
+# ========== БЛИЖАЙШИЙ СЛОТ ==========
+
+@router.callback_query(F.data.startswith("quick_service:"))
+async def quick_service(callback: CallbackQuery, state: FSMContext):
+    service_id = int(callback.data.split(":")[1])
+    db = get_db()
+    today_str = date.today().isoformat()
+    slot = db.query(TimeSlot).filter(
+        TimeSlot.is_booked == False,
+        TimeSlot.date >= today_str
+    ).order_by(TimeSlot.date, TimeSlot.time).first()
+    db.close()
+
+    if not slot:
+        await callback.answer("😔 Нет доступных слотов", show_alert=True)
+        return
+
+    await state.update_data(service_id=service_id, selected_date=slot.date, slot_id=slot.id, slot_time=slot.time)
+    await state.set_state(BookingState.entering_name)
+    try:
+        await callback.message.edit_text(
+            f"⚡ Ближайший слот: <b>{slot.date} в {slot.time}</b>\n\n"
+            f"👤 <b>Как к вам обращаться?</b>\n\nВведите ваше имя.",
+            reply_markup=simple_back_keyboard(),
+            parse_mode="HTML"
+        )
+    except Exception:
+        await callback.message.answer(
+            f"⚡ Ближайший слот: <b>{slot.date} в {slot.time}</b>\n\n"
+            f"👤 <b>Как к вам обращаться?</b>\n\nВведите ваше имя.",
+            reply_markup=simple_back_keyboard(),
+            parse_mode="HTML"
+        )
+
+
+# ========== ОПЛАТА ==========
 
 @router.callback_query(F.data == "confirm_booking", BookingState.confirming)
 async def confirm_booking(callback: CallbackQuery, state: FSMContext):
@@ -315,6 +352,7 @@ async def confirm_booking(callback: CallbackQuery, state: FSMContext):
         f"📱 <code>{SBP_PHONE}</code>\n"
         f"🏦 Банк: {SBP_BANK}\n\n"
         f"После оплаты отправьте скриншот подтверждения сюда.",
+        reply_markup=payment_keyboard(),
         parse_mode="HTML"
     )
 
@@ -366,6 +404,7 @@ async def receive_payment(message: Message, state: FSMContext):
             f"💅 {data['service_name']}\n"
             f"📅 {data['selected_date']} в {data['slot_time']}\n\n"
             f"Ждём вас! 💅",
+            reply_markup=payment_keyboard(),
             parse_mode="HTML"
         )
     else:
@@ -373,10 +412,11 @@ async def receive_payment(message: Message, state: FSMContext):
             f"⚠️ <b>Не удалось подтвердить оплату автоматически.</b>\n"
             f"Причина: {reason}\n\n"
             f"Мастер проверит вручную и свяжется с вами.",
+            reply_markup=payment_keyboard(),
             parse_mode="HTML"
         )
 
-    username_str = f"@{message.from_user.username}" if message.from_user.username else "нет username"
+    username_str = f"@{message.from_user.username}" if message.from_user.username else "нет"
     payment_status = "✅ Оплата подтверждена" if is_valid else f"⚠️ Требует проверки: {reason}"
 
     await message.bot.send_message(
@@ -389,7 +429,6 @@ async def receive_payment(message: Message, state: FSMContext):
         parse_mode="HTML"
     )
     await message.bot.send_photo(ADMIN_ID, photo.file_id, caption="Скриншот оплаты")
-
     await state.clear()
 
 
