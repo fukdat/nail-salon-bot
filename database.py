@@ -1,6 +1,6 @@
 import os
 from datetime import datetime
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean, Text, BigInteger
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean, Text, BigInteger, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from dotenv import load_dotenv
@@ -107,8 +107,19 @@ DEFAULT_SERVICES = [
 ]
 
 
+def migrate_db():
+    """Add missing columns to existing tables"""
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS client_name VARCHAR"))
+            conn.commit()
+        except Exception:
+            pass
+
+
 def init_db():
     Base.metadata.create_all(engine)
+    migrate_db()
     seed_services()
 
 
