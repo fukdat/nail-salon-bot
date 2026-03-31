@@ -35,22 +35,22 @@ def service_keyboard(service_id: int, index: int, total: int) -> InlineKeyboardM
     builder = InlineKeyboardBuilder()
     builder.button(text="📅 Записаться", callback_data=f"book_service:{service_id}")
     builder.button(text="⚡ Ближайший слот", callback_data=f"quick_service:{service_id}")
-    builder.adjust(2)
 
-    # Пагинация
-    if index > 0 and index < total - 1:
+    nav_count = 0
+    if index > 0:
         builder.button(text="⬅️ Назад", callback_data=f"service_page:{index - 1}")
+        nav_count += 1
+    if index < total - 1:
         builder.button(text="Далее ➡️", callback_data=f"service_page:{index + 1}")
-        builder.adjust(2, 2)
-    elif index > 0:
-        builder.button(text="⬅️ Назад", callback_data=f"service_page:{index - 1}")
-        builder.adjust(2, 1)
-    elif index < total - 1:
-        builder.button(text="Далее ➡️", callback_data=f"service_page:{index + 1}")
-        builder.adjust(2, 1)
+        nav_count += 1
 
     builder.button(text="🏠 В главное меню", callback_data="to_menu")
-    builder.adjust(2, 2 if (index > 0 and index < total - 1) else (1 if (index > 0 or index < total - 1) else 0), 1)
+
+    if nav_count > 0:
+        builder.adjust(2, nav_count, 1)
+    else:
+        builder.adjust(2, 1)
+
     return builder.as_markup()
 
 
