@@ -109,12 +109,22 @@ DEFAULT_SERVICES = [
 
 def migrate_db():
     """Add missing columns to existing tables"""
+    migrations = [
+        "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS client_name VARCHAR",
+        "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS service_name VARCHAR",
+        "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS service_price INTEGER DEFAULT 0",
+        "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS screenshot_file_id VARCHAR",
+        "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_verified BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS full_name VARCHAR",
+        "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS username VARCHAR",
+    ]
     with engine.connect() as conn:
-        try:
-            conn.execute(text("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS client_name VARCHAR"))
-            conn.commit()
-        except Exception:
-            pass
+        for migration in migrations:
+            try:
+                conn.execute(text(migration))
+                conn.commit()
+            except Exception:
+                pass
 
 
 def init_db():
